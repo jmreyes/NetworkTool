@@ -216,7 +216,7 @@ def _find_applicable_rules_by_source_range(source_range):
     return applicable_rules
 
 def _find_applicable_rules_by_ports(filter):
-    tcp_ports, udp_ports = _expand_port_ranges(filter)
+    tcp_ports, udp_ports = utils.expand_port_ranges(filter)
 
     applicable_rules = []
 
@@ -225,33 +225,10 @@ def _find_applicable_rules_by_ports(filter):
         for rule in rules:
             ports = rule.service_ports
             if ports:
-                rule_tcp_ports, rule_udp_ports = _expand_port_ranges(ports)
+                rule_tcp_ports, rule_udp_ports = utils.expand_port_ranges(ports)
                 common_tcp_ports = list(set(tcp_ports).intersection(rule_tcp_ports))
                 common_udp_ports = list(set(udp_ports).intersection(rule_udp_ports))
                 if len(common_tcp_ports) > 0 or len(common_udp_ports) > 0:
                     applicable_rules.append(rule)
     
     return applicable_rules
-
-def _expand_port_ranges(str):
-    str = str.replace(";", ",") # In case it comes from DB
-
-    tcp_ports = []
-    udp_ports = []
-
-    for entry in str.split(","):
-        entry_split = entry.split("-")
-        if entry_split[-1] == "tcp":
-            if len(entry_split) > 2:
-                start, end = map(int, entry_split[:2])
-                tcp_ports.extend(range(start, end + 1))
-            else:
-                tcp_ports.append(int(entry_split[0]))
-        if entry_split[-1] == "udp":
-            if len(entry_split) > 2:
-                start, end = map(int, entry_split[:2])
-                udp_ports.extend(range(start, end + 1))
-            else:
-                udp_ports.append(int(entry_split[0]))
-    
-    return tcp_ports, udp_ports

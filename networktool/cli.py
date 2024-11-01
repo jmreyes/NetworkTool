@@ -51,8 +51,13 @@ def scans_command(str1: str, str2: str = None, str3 = None, str4 = None):
         elif str2 == "segmentation-check":
             scans.segmentation_check_scan(target)
         elif str2 == "generic":
-            ports = str4
-            scans.generic_scan(target, ports)
+            if str3 == "fromscanid":
+                scanid = parse_int(str4)
+                if scanid:
+                    scans.generic_scan(scanid=scanid)
+            else:
+                ports = str4
+                scans.generic_scan(target, ports)
         elif str2 == "custom-nmap":
             flags = str4
             scans.nmap_custom_scan(target, flags)

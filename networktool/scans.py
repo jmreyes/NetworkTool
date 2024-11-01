@@ -29,7 +29,8 @@ nmap_recon_options = {
     1: {"name": "Ping Scan", "option": "-sn", "description": "Discover online hosts without scanning ports."},
     2: {"name": "SYN Scan", "option": "-sS", "description": "Perform SYN scan on hosts discovered by Ping Scan."},
     3: {"name": "SYN Scan + Version Detection", "option": "-sS -sV", "description": "Perform SYN scan and detect service versions."},
-    4: {"name": "SYN Scan + Aggressive Scan", "option": "-sS -A", "description": "Perform SYN scan and aggressive scan (OS detection, version detection, and traceroute)."},
+    4: {"name": "UDP Scan + Fast Version Detection", "option": "-sUV -F --version-intensity 0", "description": "Perform UDP scan (fast, fewer ports)."},
+    5: {"name": "SYN Scan + Aggressive Scan", "option": "-sS -A", "description": "Perform SYN scan and aggressive scan (OS detection, version detection, and traceroute)."},
 }
 
 # Nmap scan options for Segmentation Check
@@ -53,7 +54,6 @@ nmap_generic_options = {
     5: {"name": "OS Detection", "option": "-O", "description": "Enable OS detection."},
     6: {"name": "Aggressive Scan", "option": "-A", "description": "Enable OS detection, version detection, script scanning, and traceroute."},
     7: {"name": "Ping Scan", "option": "-sn", "description": "Discover online hosts without scanning ports."},
-    8: {"name": "UDP Scan + Fast Version Detection", "option": "-sUV -F --version-intensity 0", "description": "Perform UDP scan (fast)."},
 }
 
 # Valid status are taken from the libnmap library
@@ -140,26 +140,57 @@ def recon_scan(target=None, silent_mode=False):
     nmap_proc.sudo_run_background()
 
 # Generic scan
-def generic_scan(target, ports, ping_off=True, silent_mode=False):
+def generic_scan(target=None, ports=None, scanid=None, silent_mode=False):
     """Performs the Generic scan using Nmap based on the user's selection."""
-    if not target:
-        print(f"{Fore.RED}Error: Target is required for the Generic scan.{Style.RESET_ALL}")
+    if not target and not scanid:
+        print(f"{Fore.RED}Error: Target or Scan identifier is required for the Generic scan.{Style.RESET_ALL}")
         return
     
-    print(f"{Fore.MAGENTA}Starting Generic Scan on target: {target}{Style.RESET_ALL}")
+    if ports and not utils.validate_ports_format(ports):
+        cli.print_error(f"[!] Incorrect port format.")
     
-    timing_option = "-T2" if silent_mode else ""
     scan_option = _display_generic_menu()
+    
+    if target:
+        try:
+            ipaddress.ip_network(target)
+        except ValueError as e:
+            cli.print_error(f"[!] ValueError: {e}")
+            return
         
-    port_option = "" if scan_option == "-sn" else ("-p-" if ports is None else f"-p {ports}")
-    ping_option = "-Pn" if ping_off else ""
+        if ports and not utils.validate_ports_format(ports):
+            cli.print_error(f"[!] The ports must be specified as CSV with values \"<port>-tcp\" / \"<port>-udp\" / \"<port>\" (TCP will be considered if not indicated).")
+            return
 
-    flags = f"{scan_option} {port_option} {ping_option} {timing_option}".strip()
+        _generic_scan_run_single(target, ports, scan_option, silent_mode)
+    elif scanid:
+        target__nmap_ports_list_tcp, target__nmap_ports_list_udp = _get_hosts_ports_from_scanid(scanid)
+
+        cli.print_info("[i] Do you want to scan all ports (A), or just the previously detected ones (P)? [A/P]")
+        scan_all_ports = False
+        while True:
+            choice = input()
+            if choice == "A":
+                scan_all_ports = True
+                break
+            elif choice == "P":
+                break
+        
+        for scan in target__nmap_ports_list_tcp:
+            _generic_scan_run_single(scan[0], scan[1] if not scan_all_ports else None, scan_option, silent_mode)
+        for scan in target__nmap_ports_list_udp:
+            _generic_scan_run_single(scan[0], scan[1] if not scan_all_ports else None, scan_option, silent_mode)
+                
+def _generic_scan_run_single(target, ports, scan_option, silent_mode=False):
+    print(f"{Fore.MAGENTA}Starting Generic Scan on target: {target}{Style.RESET_ALL}")
+
+    timing_option = "-T2" if silent_mode else ""
+    port_option = "" if scan_option == "-sn" else ("-p-" if ports is None else f"-p{",".join(ports)}")
+    flags = f"{scan_option} {port_option} {timing_option}".strip()
 
     scanid = _store_scan(target, flags, SCAN_TYPE_GENERIC)
 
-    print(f"{Fore.CYAN}Performing scan with option: {scan_option}{Style.RESET_ALL} [ID: {scanid}]")
-
+    print(f"{Fore.MAGENTA}Performing {scan_option} on {target}{Style.RESET_ALL} [ID: {scanid}]")
     nmap_proc = NmapProcess(targets=target, options=flags, event_callback=_scan_callback)
     nmapproc_scanid[nmap_proc] = scanid
     nmap_proc.sudo_run_background()
@@ -172,74 +203,88 @@ def serviceid_scan(target=None, ports=None, scanid=None, silent_mode=False):
         cli.print_error("[!] Either the destination target and ports, or a previous Scan identifier need to be provided.")
         return
     
-    scan_option = None
-    nmap_ports_list = []
-
-    found_tcp = False
-    found_udp = False
-
     # Array of arrays, containing entries in the form [target, ports]
-    target__nmap_ports_list = []
+    target__nmap_ports_list_tcp = []
+    target__nmap_ports_list_udp = []
 
     if target and ports:
+        try:
+            ipaddress.ip_network(target)
+        except ValueError as e:
+            cli.print_error(f"[!] ValueError: {e}")
+            return
+        
         if not utils.validate_ports_format(ports):
             cli.print_error(f"[!] The ports must be specified as CSV with values \"<port>-tcp\" / \"<port>-udp\" / \"<port>\" (TCP will be considered if not indicated).")
             return
+
+        nmap_ports_list_tcp = []
+        nmap_ports_list_udp = []
         
         for port in ports.split(","):
             if "-udp" in port:
-                found_udp = True
-            elif "-tcp" in port:
-                found_tcp = True
+                nmap_ports_list_udp.append(port.strip("-udp"))
             else:
-                found_tcp = True
-            port = port.strip("-tcp").strip("-udp")
-            nmap_ports_list.append(port)
+                nmap_ports_list_tcp.append(port.strip("-tcp"))
         
-        target__nmap_ports_list.append([target, nmap_ports_list])      
+        target__nmap_ports_list_tcp.append([target, nmap_ports_list_tcp])
+        target__nmap_ports_list_udp.append([target, nmap_ports_list_udp])
     elif scanid:
-        with db.sqlhandler.Session() as sess:
-            scan = sess.query(db.SqlHandler.Scan).get(scanid)
-            if not scan:
-                cli.print_error(f"No Scan with this identifier. Status: {scan.status}")
-                return
-            if len(scan.reports) == 0:
-                cli.print_error(f"Scan has no Report. Status: {scan.status}")
-                return
+        target__nmap_ports_list_tcp, target__nmap_ports_list_udp = _get_hosts_ports_from_scanid(scanid)
+
+    scan_option = " -sV --version-intensity 9"
+    
+    for scan in target__nmap_ports_list_tcp:
+        _serviceid_scan_run_single(scan[0], scan[1], "-sS" + scan_option, silent_mode)
+    
+    for scan in target__nmap_ports_list_udp:
+        _serviceid_scan_run_single(scan[0], scan[1], "-sU" + scan_option, silent_mode)
+
+def _get_hosts_ports_from_scanid(scanid):
+    target__nmap_ports_list_tcp = []
+    target__nmap_ports_list_udp = []
+
+    with db.sqlhandler.Session() as sess:
+        scan = sess.query(db.SqlHandler.Scan).get(scanid)
+        if not scan:
+            cli.print_error(f"No Scan with this identifier. Status: {scan.status}")
+            return
+        if len(scan.reports) == 0:
+            cli.print_error(f"Scan has no Report. Status: {scan.status}")
+            return
         
-            report = scan.reports[0].decode()
-            _tabulate_host_services(report.hosts)
-            cli.print_info("[i] Please select one of the hosts to base the service identification scan on. Introduce \"A\" to launch one Scan for every host.")
+        report = scan.reports[0].decode()
+        hosts_up = [host for host in report.hosts if host.status == "up"]
+        _tabulate_host_services(hosts_up)
+        
+        cli.print_info("[i] Please select one of the hosts to base the service identification scan on. Introduce \"A\" to launch one Scan for every host.")
+        hosts = []
+    
+        while True:
             choice = input()
             if choice == "A":
-                found_tcp, found_udp = _parse_host_find_tcp_udp(report.hosts)
-                for host in report.hosts:
-                    target__nmap_ports_list.append(_parse_host_services(host))
+                hosts = hosts_up
+                break
             else:
                 try:
                     pos = int(choice)
+                    if pos < len(hosts_up):
+                        hosts = [hosts_up[pos]]
+                    break
                 except ValueError:
-                    cli.print_error(f"Please enter a valid number.")
-                if pos < len(report.hosts):
-                    host = report.hosts[pos]
-                    found_tcp, found_udp = _parse_host_find_tcp_udp([host])
-                    target__nmap_ports_list.append(_parse_host_services(host))
-                        
-    if found_tcp and found_udp:
-        scan_option = "-sSU"
-    elif found_tcp:
-        scan_option = "-sS"
-    elif found_udp:
-        scan_option = "-sU"
-
-    scan_option += " -sV --version-intensity 9"
+                    cli.print_error(f"Please enter a valid integer.")
+        
+        for host in hosts:
+            hostaddr, tcp_ports, udp_ports = _parse_host_services(host)
+            if len(tcp_ports) > 0:
+                target__nmap_ports_list_tcp.append([hostaddr, tcp_ports])
+            if len(udp_ports) > 0:
+                target__nmap_ports_list_udp.append([hostaddr, udp_ports])
     
-    for scan in target__nmap_ports_list:
-        _serviceid_scan_run_single(scan[0], scan[1], scan_option, silent_mode)
+    return target__nmap_ports_list_tcp, target__nmap_ports_list_udp
 
 def _serviceid_scan_run_single(target, nmap_ports_list, scan_option, silent_mode=False):
     timing_option = "-T2" if silent_mode else ""
-    print(nmap_ports_list)
     flags = f"{scan_option} -p{",".join(nmap_ports_list)} {timing_option}"
 
     scanid = _store_scan(target, flags, SCAN_TYPE_SERVICEID)
@@ -250,24 +295,14 @@ def _serviceid_scan_run_single(target, nmap_ports_list, scan_option, silent_mode
     nmap_proc.sudo_run_background()
 
 def _parse_host_services(host):
-    nmap_ports_list = []
+    nmap_ports_list_tcp = []
+    nmap_ports_list_udp = []
     for service in host.services:
         if (service.protocol == "tcp" and service.state == "open"):
-            nmap_ports_list.append(str(service.port))
+            nmap_ports_list_tcp.append(str(service.port))
         elif (service.protocol == "udp" and service.state in ["open", "open|filtered"]):
-            nmap_ports_list.append(str(service.port))
-    return host.address, nmap_ports_list
-
-def _parse_host_find_tcp_udp(hosts):
-    found_tcp = False
-    found_udp = False
-    for host in hosts:
-        for service in host.services:
-            if (service.protocol == "tcp" and service.state == "open"):
-                found_tcp = True
-            elif (service.protocol == "udp" and service.state in ["open", "open|filtered"]):
-                found_udp = True
-    return found_tcp, found_udp
+            nmap_ports_list_udp.append(str(service.port))
+    return host.address, nmap_ports_list_tcp, nmap_ports_list_udp
 
 # Segmentation Check scan
 def segmentation_check_scan(target, silent_mode=False):
@@ -457,6 +492,7 @@ def _store_scan(nmap_target, nmap_flags, scan_type):
 
 def _tabulate_scans(scans):
     headers = ["ID", "Type", "Source", "Nmap Target", "Nmap Flags", "Percent.", "Status", "SourceNetworks", "Targets", "Rules (ID)"]
+    maxcolwidths = [None, None, None, None, 45, None, None, None, None, None]
     data = []
     for scan in scans:
         status = scan.status
@@ -488,7 +524,7 @@ def _tabulate_scans(scans):
                       ", ".join(targets),
                       ", ".join(ruleids)])
     if len(data) > 0:
-        cli.repl.print(tabulate(data, headers=headers, tablefmt='grid'))
+        cli.repl.print(tabulate(data, headers=headers, maxcolwidths=maxcolwidths, tablefmt='grid'))
 
 def _tabulate_host_services(hosts):
     headers = ["N", "Address", "Hostnames", "Ports"]
@@ -781,16 +817,18 @@ def _find_applicable_rules(source_ip, target_range):
         for rule in rules:
             src_matches = False
             dst_matches = False
-            rule_src_addr_ips = rule.src_addr_ips.split(";")
-            for rule_src_addr_ip in rule_src_addr_ips:
-                if source_ip_addr in ipaddress.ip_network(rule_src_addr_ip):
-                    src_matches = True
-                    break
-            rule_dst_addr_ips = rule.dst_addr_ips.split(";")
-            for rule_dst_addr_ip in rule_dst_addr_ips:
-                if target_ip_range.overlaps(ipaddress.ip_network(rule_dst_addr_ip)):
-                    dst_matches = True
-                    break
+            if rule.src_addr_ips:
+                rule_src_addr_ips = rule.src_addr_ips.split(";")
+                for rule_src_addr_ip in rule_src_addr_ips:
+                    if source_ip_addr in ipaddress.ip_network(rule_src_addr_ip):
+                        src_matches = True
+                        break
+            if rule.dst_addr_ips:
+                rule_dst_addr_ips = rule.dst_addr_ips.split(";")
+                for rule_dst_addr_ip in rule_dst_addr_ips:
+                    if target_ip_range.overlaps(ipaddress.ip_network(rule_dst_addr_ip)):
+                        dst_matches = True
+                        break
             if src_matches and dst_matches:
                 results.append(rule)
         return results

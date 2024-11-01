@@ -5,6 +5,7 @@ import re
 
 import cli
 from tabulate import tabulate
+from sqlalchemy.sql import or_
 
 import db
 import utils
@@ -34,13 +35,21 @@ def rm_rule(ruleid):
 def list_rules(filter=None):
     with db.sqlhandler.Session() as sess:
         if filter == "hidden":
-            rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.hidden == True).order_by(db.SqlHandler.Rule.id).all()
+            rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.hidden == True).all()
         elif filter == "all":
-            rules = sess.query(db.SqlHandler.Rule).order_by(db.SqlHandler.Rule.id).all()
+            rules = sess.query(db.SqlHandler.Rule).all()
         elif filter == "applicable": # Show rules applicable to the current IP address + netmask of the interface
             local_range = utils.get_local_ip_range()
             cli.print_info(f"[i] Filtering rules applicable (in source or destination IPs) to local range {local_range}")
-            rules = _find_applicable_rules(local_range)
+            rules = _find_applicable_rules_by_source_range(local_range)
+        elif filter and filter.startswith("zone="): # Filtering by zone
+            zone = filter.split("zone=")[1]
+            sql_filter = or_(db.SqlHandler.Rule.src_zone.like(zone), db.SqlHandler.Rule.dst_zone.like(zone))
+            rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.hidden == False).filter(sql_filter).all()
+        elif filter and re.match(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:\/[0-9]{1,2})?\b", filter): # Filtering by IP or range
+            rules = _find_applicable_rules_by_source_range(filter)
+        elif filter and ("tcp" in filter or "udp" in filter) : # Filtering by port (comma-separated values in the form <port>-(tcp|udp))
+            rules = _find_applicable_rules_by_ports(filter)
         elif filter and re.match(r'^(?:[1-9]\d*|[1-9]\d*-[1-9]\d*)(,(?:[1-9]\d*|[1-9]\d*-[1-9]\d*))*$', filter): # ID filtering - comma-separated positive ints and ranges
             ids = []
             for id_range in filter.split(","):
@@ -49,9 +58,10 @@ def list_rules(filter=None):
                     ids.extend(range(start, end + 1))
                 else:
                     ids.append(id_range)
-            rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.id.in_(ids)).order_by(db.SqlHandler.Rule.id).all()
+            rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.id.in_(ids)).all()
         else:
-            rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.hidden == False).order_by(db.SqlHandler.Rule.id).all()
+            rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.hidden == False).all()
+
         _tabulate_rules(rules)
 
 def show_rule(ruleid):
@@ -117,6 +127,7 @@ def unhide_rule(ruleid):
 def _tabulate_rules(rules):
     headers = ["ID", "SRC Zone", "SRC Addr", "SRC Addr (IPs)", "DST Zone", "DST Addr", "DST Addr (IPs)", "Appl.", "Service", "Srv. (Ports)", "Action"]
     maxcolwidths=[None, None, 26, None, None, 26, None, None, None, None]
+
     data = [ [
             rule.id,
             "\n".join(rule.src_zone.split(";")),
@@ -130,6 +141,7 @@ def _tabulate_rules(rules):
             "\n".join(rule.service_ports.split(";")),
             rule.action
          ] for rule in rules ]
+
     if len(data) > 0:
         cli.repl.print(tabulate(data, headers=headers, tablefmt='grid', maxcolwidths=maxcolwidths))
 
@@ -174,12 +186,18 @@ def _pretty_print_nested_structure(data):
     
     cli.print(result+"\n")
 
-def _find_applicable_rules(source_range):
+def _find_applicable_rules_by_source_range(source_range):
     """Obtain every Rule that matches the provided source range (either in src or dst)."""
-    source_ip_range = ipaddress.ip_network(source_range)
+    try:
+        source_ip_range = ipaddress.ip_network(source_range)
+    except ValueError as e:
+        cli.print_error(f"[!] ValueError: {e}")
+        return []
+
     applicable_rules = []
+
     with db.sqlhandler.Session() as sess:
-        rules = sess.query(db.SqlHandler.Rule).all()
+        rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.hidden == False).all()
         for rule in rules:
             add_rule = False
             if rule.src_addr_ips:
@@ -194,4 +212,46 @@ def _find_applicable_rules(source_range):
                         add_rule = True
             if add_rule:
                 applicable_rules.append(rule)
+
     return applicable_rules
+
+def _find_applicable_rules_by_ports(filter):
+    tcp_ports, udp_ports = _expand_port_ranges(filter)
+
+    applicable_rules = []
+
+    with db.sqlhandler.Session() as sess:
+        rules = sess.query(db.SqlHandler.Rule).filter(db.SqlHandler.Rule.hidden == False).all()
+        for rule in rules:
+            ports = rule.service_ports
+            if ports:
+                rule_tcp_ports, rule_udp_ports = _expand_port_ranges(ports)
+                common_tcp_ports = list(set(tcp_ports).intersection(rule_tcp_ports))
+                common_udp_ports = list(set(udp_ports).intersection(rule_udp_ports))
+                if len(common_tcp_ports) > 0 or len(common_udp_ports) > 0:
+                    applicable_rules.append(rule)
+    
+    return applicable_rules
+
+def _expand_port_ranges(str):
+    str = str.replace(";", ",") # In case it comes from DB
+
+    tcp_ports = []
+    udp_ports = []
+
+    for entry in str.split(","):
+        entry_split = entry.split("-")
+        if entry_split[-1] == "tcp":
+            if len(entry_split) > 2:
+                start, end = map(int, entry_split[:2])
+                tcp_ports.extend(range(start, end + 1))
+            else:
+                tcp_ports.append(int(entry_split[0]))
+        if entry_split[-1] == "udp":
+            if len(entry_split) > 2:
+                start, end = map(int, entry_split[:2])
+                udp_ports.extend(range(start, end + 1))
+            else:
+                udp_ports.append(int(entry_split[0]))
+    
+    return tcp_ports, udp_ports

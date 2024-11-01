@@ -1,4 +1,3 @@
 venv/
 __pycache__/
-ruleimporter/
 db.sqlite

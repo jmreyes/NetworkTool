@@ -3,6 +3,7 @@
 import argparse
 import csv
 import re
+from itertools import chain
 
 from ipaddress import ip_network
 
@@ -58,23 +59,37 @@ def parse_and_import_csv(file_path):
 
 def extract_ips(addr_text):
     # Reusing the regular expression to match IP ranges in CIDR notation
-    ip_ranges = re.findall(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}\b', addr_text)
+    ip_ranges = re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:\/[0-9]{1,2})?\b", addr_text)
+
+    # Add "/32" for single IPs (needed for consistency)
+    for i, _ in enumerate(ip_ranges):
+        ip_range_split = ip_ranges[i].split("/")
+        if len(ip_range_split) == 1:
+            ip_ranges[i] = ip_ranges[i] + "/32"
 
     # Convert each CIDR range to an ip_network object and sort them
-    sorted_ip_ranges = sorted(ip_ranges, key=lambda x: ip_network(x))
+    sorted_unique_ip_ranges = sorted(set(ip_ranges), key=lambda x: ip_network(x))
 
     # Join sorted IP ranges into a comma-separated list
-    return ";".join(sorted_ip_ranges)
+    return ";".join(sorted_unique_ip_ranges)
     
 def extract_ports(service_text):
     # Regular expression to match port ranges or individual ports with TCP
-    port_ranges = re.findall(r'\b\d{1,5}(?:-\d{1,5})?-tcp\b', service_text)
+    port_ranges_tcp = re.findall(r'\b\d{1,5}(?:-\d{1,5})?-tcp\b', service_text)
 
     # Extract start and end of ranges or individual ports and sort them
-    sorted_ports = sorted(port_ranges, key=lambda x: int(x.split('-')[0]))
+    sorted_ports_tcp = sorted(port_ranges_tcp, key=lambda x: int(x.split('-')[0]))
+
+    # Regular expression to match port ranges or individual ports with UDP
+    port_ranges_udp = re.findall(r'\b\d{1,5}(?:-\d{1,5})?-udp\b', service_text)
+
+    # Extract start and end of ranges or individual ports and sort them
+    sorted_ports_udp = sorted(port_ranges_udp, key=lambda x: int(x.split('-')[0]))
+
+    sorted_ports_all= chain(sorted_ports_tcp, sorted_ports_udp)
     
     # Join sorted port ranges into a comma-separated list
-    return ";".join(sorted_ports)
+    return ";".join(sorted_ports_all)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parse a CSV file containing rules from the command line, importing its contents in the network-tool DB.")

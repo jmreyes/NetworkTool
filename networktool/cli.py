@@ -33,7 +33,7 @@ def help():
     repl.info(f"Available commands: {"/".join(COMMANDS)}. Execute 'help <command> (<subcommand>)' for additional details.")
 
 @repl.command("scans", description="Execute scans per category.")
-def scans_command(str1: str, str2: str = None, str3 = None, str4 = None, str5 = None):
+def scans_command(str1: str, str2: str = None, str3 = None, str4 = None):
     help_str = f"Usage: scans {"/".join(SCANS_SUBCOMMANDS)}. Execute 'help <command> <subcommand>' for additional details." 
 
     if str1 == "new":

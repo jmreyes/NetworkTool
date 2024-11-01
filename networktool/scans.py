@@ -124,7 +124,7 @@ def recon_scan(target=None, silent_mode=False):
     """Performs the Recon scans based on the user's selection."""
     
     if not target:
-        target = _get_local_ip_range()  # Detect the local network range if target is not provided
+        target = utils.get_local_ip_range()  # Detect the local network range if target is not provided
         print(f"{Fore.YELLOW}No target provided. Using local IP range: {target}{Style.RESET_ALL}")
     
     timing_option = "-T2" if silent_mode else ""
@@ -624,23 +624,6 @@ def _display_generic_menu():
             print(f"{Fore.RED}Please enter a valid number.{Style.RESET_ALL}")
 
 # Function to detect the local network range dynamically
-def _get_local_ip_range():
-    """Get the local IP address range dynamically using the system network interfaces."""
-    for interface in netifaces.interfaces():
-        addresses = netifaces.ifaddresses(interface)
-        if netifaces.AF_INET in addresses:
-            ipv4_info = addresses[netifaces.AF_INET][0]
-            ip_address = ipv4_info['addr']
-            netmask = ipv4_info['netmask']
-
-            # Skip the loopback interface (127.x.x.x)
-            if not ip_address.startswith("127."):
-                network = ipaddress.IPv4Network(f"{ip_address}/{netmask}", strict=False)
-                return str(network)
-    
-    raise RuntimeError("Could not find a valid non-loopback IP address")
-
-# Function to detect the local network range dynamically
 def _get_local_ip():
     """Get the local IP dynamically using the system network interfaces."""
     for interface in netifaces.interfaces():
@@ -802,12 +785,12 @@ def _find_applicable_rules(source_ip, target_range):
             for rule_src_addr_ip in rule_src_addr_ips:
                 if source_ip_addr in ipaddress.ip_network(rule_src_addr_ip):
                     src_matches = True
-                    continue
+                    break
             rule_dst_addr_ips = rule.dst_addr_ips.split(";")
             for rule_dst_addr_ip in rule_dst_addr_ips:
                 if target_ip_range.overlaps(ipaddress.ip_network(rule_dst_addr_ip)):
                     dst_matches = True
-                    continue
+                    break
             if src_matches and dst_matches:
                 results.append(rule)
         return results

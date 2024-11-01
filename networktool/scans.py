@@ -8,6 +8,7 @@ from tabulate import tabulate
 from sqlalchemy.sql import and_
 import json
 import re
+import lxml.etree as ET
 
 from colorama import init, Fore, Style
 
@@ -105,7 +106,7 @@ def _scan_callback(nmap_proc):
             parsed = NmapParser.parse(nmap_proc.stdout)
         except NmapParserException as e:
             cli.repl.error(f"Exception raised while parsing scan: {e.msg}")
-        report = db.SqlHandler.Report(parsed)
+        report = db.SqlHandler.Report(parsed, nmap_proc.stdout)
         sess.add(report)
         scan.reports.append(report)
 
@@ -588,6 +589,7 @@ def export_scan(scanid, output_file):
         return
 
     report = None
+    report_xml = None
     
     with db.sqlhandler.Session() as sess:
         scan = sess.query(db.SqlHandler.Scan).get(scanid)
@@ -596,20 +598,28 @@ def export_scan(scanid, output_file):
             return
         if len(scan.reports) > 0:
             report = scan.reports[0].decode()
+            report_xml = scan.reports[0].report_xml
         else:
             cli.print_error(f"No report for this Scan. Status: {scan.status}")
             return
 
     results = None
-    if output_file.endswith(".txt"):
-        results = _format_output_txt(report)
-        print(results)
-        _write_final_report(results, output_file)
-    elif output_file.endswith(".md"):
-        results = _format_output_md(report)
-        _write_final_report(results, output_file)
-    elif output_file.endswith(".json"):
-        _generate_and_save_report(report, output_file, _format_output_json)
+    try:
+        if output_file.endswith(".txt"):
+            results = _format_output_txt(report)
+            print(results)
+            _write_final_report(results, output_file)
+        elif output_file.endswith(".md"):
+            results = _format_output_md(report)
+            _write_final_report(results, output_file)
+        elif output_file.endswith(".json"):
+            _generate_and_save_report(report, output_file, _format_output_json)
+        elif output_file.endswith(".xml"):
+            _write_final_report(report_xml, output_file)
+        elif output_file.endswith(".html"):
+            _write_html_report(report_xml, output_file)
+    except Exception as e:
+        cli.print_error(f"Exception: {e}")
 
 def _display_recon_menu():
     """Display the Nmap scan menu for the Recon scan."""
@@ -691,6 +701,15 @@ def _write_final_report(results, file_path):
     """Write the final report containing results for all IPs to the output file."""
     with open(file_path, 'w') as f:
         f.write(results)
+
+# Write HTML report from nmap xsl
+def _write_html_report(xmlstring, file_path):
+    """Write the final report containing results for all IPs to the output file."""
+    dom = ET.fromstring(xmlstring.encode('utf-8'))
+    xslt = ET.parse("/usr/share/nmap/nmap.xsl")
+    transform = ET.XSLT(xslt)
+    newdom = transform(dom)
+    newdom.write(file_path)
 
 # Reporting Functions
 def _format_output_txt(report):

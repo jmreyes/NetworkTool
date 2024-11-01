@@ -207,12 +207,14 @@ class SqlHandler:
         id = Column("id", Integer, primary_key=True)
         inserted = Column("inserted", DateTime(), server_default=func.now())
         report_json = Column("report_json", Text())
+        report_xml = Column("report_xml", Text())
         scans: Mapped[List["Scan"]] = relationship(
             secondary=scans_reports_table, back_populates="reports")
 
-        def __init__(self, obj):
+        def __init__(self, obj, report_xml):
             dumped_json = json.dumps(obj, cls=ReportEncoder)
             self.report_json = bytes(dumped_json.encode("UTF-8"))
+            self.report_xml = report_xml
         
         def decode(self):
             json_decoded = self.report_json.decode("utf-8")

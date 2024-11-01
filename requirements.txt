@@ -1,5 +1,6 @@
 colorama==0.4.6
 greenlet==3.1.1
+lxml==5.3.0
 netifaces==0.11.0
 python-libnmap==0.7.3
 riposte==0.5.1

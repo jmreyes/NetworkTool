@@ -607,7 +607,6 @@ def export_scan(scanid, output_file):
     try:
         if output_file.endswith(".txt"):
             results = _format_output_txt(report)
-            print(results)
             _write_final_report(results, output_file)
         elif output_file.endswith(".md"):
             results = _format_output_md(report)
@@ -618,6 +617,8 @@ def export_scan(scanid, output_file):
             _write_final_report(report_xml, output_file)
         elif output_file.endswith(".html"):
             _write_html_report(report_xml, output_file)
+        else:
+            cli.print_error("[!] No valid extension specified.")
     except Exception as e:
         cli.print_error(f"Exception: {e}")
 
